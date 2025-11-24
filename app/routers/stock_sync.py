@@ -159,6 +159,9 @@ async def sync_single_stock(
                     service = await get_tushare_sync_service()
                 elif actual_data_source == "akshare":
                     service = await get_akshare_sync_service()
+                elif actual_data_source == "baostock":
+                    from app.worker.baostock_sync_service import get_baostock_sync_service
+                    service = await get_baostock_sync_service()
                 else:
                     raise ValueError(f"不支持的数据源: {actual_data_source}")
 
@@ -213,6 +216,9 @@ async def sync_single_stock(
                     service = await get_tushare_sync_service()
                 elif request.data_source == "akshare":
                     service = await get_akshare_sync_service()
+                elif request.data_source == "baostock":
+                    from app.worker.baostock_sync_service import get_baostock_sync_service
+                    service = await get_baostock_sync_service()
                 else:
                     raise ValueError(f"不支持的数据源: {request.data_source}")
 
@@ -556,6 +562,9 @@ async def sync_batch_stocks(
                     service = await get_tushare_sync_service()
                 elif request.data_source == "akshare":
                     service = await get_akshare_sync_service()
+                elif request.data_source == "baostock":
+                    from app.worker.baostock_sync_service import get_baostock_sync_service
+                    service = await get_baostock_sync_service()
                 else:
                     raise ValueError(f"不支持的数据源: {request.data_source}")
 

@@ -426,6 +426,7 @@
           <el-radio-group v-model="batchSyncForm.dataSource">
             <el-radio label="tushare">Tushare</el-radio>
             <el-radio label="akshare">AKShare</el-radio>
+            <el-radio label="baostock">BaoStock</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="历史数据天数" v-if="batchSyncForm.syncTypes.includes('historical')">
@@ -467,7 +468,10 @@
         </el-form-item>
         <el-form-item label="同步内容">
           <el-checkbox-group v-model="singleSyncForm.syncTypes">
-            <el-checkbox label="realtime">实时行情</el-checkbox>
+            <el-checkbox label="realtime" :disabled="singleSyncForm.dataSource === 'baostock'">
+              实时行情
+              <span v-if="singleSyncForm.dataSource === 'baostock'" style="color: #909399; font-size: 12px;">（BaoStock不支持）</span>
+            </el-checkbox>
             <el-checkbox label="historical">历史行情数据</el-checkbox>
             <el-checkbox label="financial">财务数据</el-checkbox>
             <el-checkbox label="basic">基础数据</el-checkbox>
@@ -477,6 +481,7 @@
           <el-radio-group v-model="singleSyncForm.dataSource">
             <el-radio label="tushare">Tushare</el-radio>
             <el-radio label="akshare">AKShare</el-radio>
+            <el-radio label="baostock">BaoStock</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="历史数据天数" v-if="singleSyncForm.syncTypes.includes('historical')">
@@ -499,7 +504,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
 import {
@@ -563,8 +568,23 @@ const currentSyncStock = ref({
 })
 const singleSyncForm = ref({
   syncTypes: ['realtime'],  // 默认只选中实时行情（最常用）
-  dataSource: 'tushare' as 'tushare' | 'akshare',
+  dataSource: 'tushare' as 'tushare' | 'akshare' | 'baostock',
   days: 365
+})
+
+// 监听数据源变化，BaoStock不支持实时行情
+watch(() => singleSyncForm.value.dataSource, (newSource) => {
+  if (newSource === 'baostock') {
+    // 移除 realtime 选项
+    const index = singleSyncForm.value.syncTypes.indexOf('realtime')
+    if (index > -1) {
+      singleSyncForm.value.syncTypes.splice(index, 1)
+    }
+    // 如果没有选中任何类型，默认选中历史数据
+    if (singleSyncForm.value.syncTypes.length === 0) {
+      singleSyncForm.value.syncTypes = ['historical']
+    }
+  }
 })
 
 // 添加对话框

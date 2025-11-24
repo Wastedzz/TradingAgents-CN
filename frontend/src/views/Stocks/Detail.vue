@@ -325,7 +325,10 @@
         </el-form-item>
         <el-form-item label="同步内容">
           <el-checkbox-group v-model="syncForm.syncTypes">
-            <el-checkbox label="realtime">实时行情</el-checkbox>
+            <el-checkbox label="realtime" :disabled="syncForm.dataSource === 'baostock'">
+              实时行情
+              <span v-if="syncForm.dataSource === 'baostock'" style="color: #909399; font-size: 12px;">（BaoStock不支持）</span>
+            </el-checkbox>
             <el-checkbox label="historical">历史行情数据</el-checkbox>
             <el-checkbox label="financial">财务数据</el-checkbox>
             <el-checkbox label="basic">基础数据</el-checkbox>
@@ -335,6 +338,7 @@
           <el-radio-group v-model="syncForm.dataSource">
             <el-radio label="tushare">Tushare</el-radio>
             <el-radio label="akshare">AKShare</el-radio>
+            <el-radio label="baostock">BaoStock</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="历史数据天数" v-if="syncForm.syncTypes.includes('historical')">
@@ -506,8 +510,23 @@ const syncDialogVisible = ref(false)
 const syncLoading = ref(false)
 const syncForm = reactive({
   syncTypes: ['realtime'],  // 默认选中实时行情
-  dataSource: 'tushare' as 'tushare' | 'akshare',
+  dataSource: 'tushare' as 'tushare' | 'akshare' | 'baostock',
   days: 365
+})
+
+// 监听数据源变化，BaoStock不支持实时行情
+watch(() => syncForm.dataSource, (newSource) => {
+  if (newSource === 'baostock') {
+    // 移除 realtime 选项
+    const index = syncForm.syncTypes.indexOf('realtime')
+    if (index > -1) {
+      syncForm.syncTypes.splice(index, 1)
+    }
+    // 如果没有选中任何类型，默认选中历史数据
+    if (syncForm.syncTypes.length === 0) {
+      syncForm.syncTypes = ['historical']
+    }
+  }
 })
 
 // 清除缓存

@@ -345,71 +345,6 @@ class BaoStockSyncService:
             logger.error(f"❌ 更新日K线到数据库失败: {e}")
             raise
     
-    async def sync_historical_data(self, days: int = 30, batch_size: int = 20, period: str = "daily", incremental: bool = True) -> BaoStockSyncStats:
-        """
-        同步历史数据
-
-        Args:
-            days: 同步天数（如果>=3650则同步全历史，如果<0则使用增量模式）
-            batch_size: 批处理大小
-            period: 数据周期 (daily/weekly/monthly)
-            incremental: 是否增量同步（每只股票从自己的最后日期开始）
-
-        Returns:
-            同步统计信息
-        """
-        stats = BaoStockSyncStats()
-
-        try:
-            period_name = {"daily": "日线", "weekly": "周线", "monthly": "月线"}.get(period, "日线")
-
-            # 计算日期范围
-            end_date = datetime.now().strftime('%Y-%m-%d')
-
-            # 确定同步模式
-            use_incremental = incremental or days < 0
-
-            # 从数据库获取股票列表
-            collection = self.db.stock_basic_info
-            cursor = collection.find({"data_source": "baostock"}, {"code": 1})
-            stock_codes = [doc["code"] async for doc in cursor]
-
-            if not stock_codes:
-                logger.warning("⚠️ 数据库中没有BaoStock股票数据")
-                return stats
-
-            if use_incremental:
-                logger.info(f"🔄 开始BaoStock{period_name}历史数据同步 (增量模式: 各股票从最后日期到{end_date})...")
-            elif days >= 3650:
-                logger.info(f"🔄 开始BaoStock{period_name}历史数据同步 (全历史: 1990-01-01到{end_date})...")
-            else:
-                logger.info(f"🔄 开始BaoStock{period_name}历史数据同步 (最近{days}天到{end_date})...")
-
-            logger.info(f"📊 开始同步{len(stock_codes)}只股票的历史数据...")
-
-            # 批量处理
-            for i in range(0, len(stock_codes), batch_size):
-                batch = stock_codes[i:i + batch_size]
-                batch_stats = await self._sync_historical_batch(batch, days, end_date, period, use_incremental)
-                
-                stats.historical_records += batch_stats.historical_records
-                stats.errors.extend(batch_stats.errors)
-                
-                logger.info(f"📊 批次进度: {i + len(batch)}/{len(stock_codes)}, "
-                          f"记录: {batch_stats.historical_records}, "
-                          f"错误: {len(batch_stats.errors)}")
-                
-                # 避免API限制
-                await asyncio.sleep(0.5)
-            
-            logger.info(f"✅ BaoStock历史数据同步完成: {stats.historical_records}条记录")
-            return stats
-            
-        except Exception as e:
-            logger.error(f"❌ BaoStock历史数据同步失败: {e}")
-            stats.errors.append(str(e))
-            return stats
-    
     async def _sync_historical_batch(
         self,
         code_batch: List[str],
@@ -561,6 +496,224 @@ class BaoStockSyncService:
                 "last_check": datetime.now().isoformat()
             }
 
+    async def sync_realtime_quotes(self, symbols: List[str] = None, force: bool = False) -> Dict[str, Any]:
+        """
+        同步实时行情数据（兼容接口）
+
+        Args:
+            symbols: 指定股票代码列表
+            force: 是否强制执行
+
+        Returns:
+            同步结果统计
+        """
+        logger.info(f"🔄 BaoStock 实时行情同步: symbols={symbols if symbols else '全部'}")
+
+        stats = {
+            "total_processed": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "error_count": 0,
+            "errors": []
+        }
+
+        try:
+            # BaoStock 不支持实时行情，使用最新的日K线数据代替
+            if symbols:
+                # 同步指定股票的最新日K线（相当于"准实时"数据）
+                logger.info(f"💡 BaoStock 不支持实时行情，使用最新日K线数据代替")
+
+                # 获取最近1天的数据（即最新日K线）
+                from datetime import datetime, timedelta
+                end_date = datetime.now().strftime('%Y-%m-%d')
+                start_date = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d')  # 获取最近5天，确保有数据
+
+                batch_stats = await self._sync_historical_batch(
+                    code_batch=symbols,
+                    days=5,
+                    end_date=end_date,
+                    period="daily",
+                    incremental=False
+                )
+
+                stats["success_count"] = batch_stats.historical_records
+                stats["total_processed"] = len(symbols)
+                stats["errors"] = batch_stats.errors
+                stats["error_count"] = len(batch_stats.errors)
+                stats["failed_count"] = len(batch_stats.errors)
+            else:
+                # 同步所有股票的日K线
+                daily_stats = await self.sync_daily_quotes(batch_size=50)
+
+                stats["success_count"] = daily_stats.quotes_count
+                stats["total_processed"] = daily_stats.quotes_count
+                stats["errors"] = daily_stats.errors
+                stats["error_count"] = len(daily_stats.errors)
+                stats["failed_count"] = len(daily_stats.errors)
+
+            logger.info(f"✅ BaoStock 实时行情同步完成: {stats['success_count']} 条记录")
+            return stats
+
+        except Exception as e:
+            logger.error(f"❌ BaoStock 实时行情同步失败: {e}")
+            stats["error_count"] += 1
+            stats["errors"].append(str(e))
+            stats["failed_count"] += 1
+            return stats
+
+    async def sync_historical_data(
+        self,
+        symbols: List[str] = None,
+        start_date: str = None,
+        end_date: str = None,
+        period: str = "daily",
+        incremental: bool = False
+    ) -> Dict[str, Any]:
+        """
+        同步历史数据（兼容接口）
+
+        Args:
+            symbols: 指定股票代码列表，如果为空则同步所有股票
+            start_date: 开始日期
+            end_date: 结束日期
+            period: 数据周期
+            incremental: 是否增量同步
+
+        Returns:
+            同步结果统计
+        """
+        logger.info(f"🔄 BaoStock 历史数据同步: symbols={symbols}, period={period}, incremental={incremental}")
+
+        stats = BaoStockSyncStats()
+
+        try:
+            # 如果指定了股票列表，直接同步这些股票
+            if symbols:
+                logger.info(f"📊 同步指定的 {len(symbols)} 只股票: {symbols}")
+
+                # 计算日期范围
+                if not end_date:
+                    end_date = datetime.now().strftime('%Y-%m-%d')
+
+                if start_date and end_date:
+                    try:
+                        start = datetime.strptime(start_date, '%Y-%m-%d')
+                        end = datetime.strptime(end_date, '%Y-%m-%d')
+                        days = (end - start).days
+                    except:
+                        days = 30
+                else:
+                    days = 30
+
+                # 直接同步指定的股票
+                batch_stats = await self._sync_historical_batch(
+                    code_batch=symbols,
+                    days=days,
+                    end_date=end_date,
+                    period=period,
+                    incremental=incremental
+                )
+
+                stats.historical_records = batch_stats.historical_records
+                stats.errors = batch_stats.errors
+
+                logger.info(f"✅ BaoStock 指定股票历史数据同步完成: {stats.historical_records} 条记录, {len(stats.errors)} 个错误")
+            else:
+                # 没有指定股票，同步所有股票（使用原有逻辑）
+                if start_date and end_date:
+                    try:
+                        start = datetime.strptime(start_date, '%Y-%m-%d')
+                        end = datetime.strptime(end_date, '%Y-%m-%d')
+                        days = (end - start).days
+                    except:
+                        days = 30
+                else:
+                    days = 30
+
+                stats = await self._sync_historical_data_internal(
+                    days=days,
+                    batch_size=20,
+                    period=period,
+                    incremental=incremental
+                )
+
+            # 转换为兼容的返回格式
+            return {
+                "success_count": stats.historical_records if stats.historical_records > 0 else 0,
+                "failed_count": len(stats.errors),
+                "total_records": stats.historical_records,
+                "errors": stats.errors
+            }
+
+        except Exception as e:
+            logger.error(f"❌ BaoStock 历史数据同步失败: {e}")
+            return {
+                "success_count": 0,
+                "failed_count": 1,
+                "total_records": 0,
+                "errors": [str(e)]
+            }
+
+    async def _sync_historical_data_internal(self, days: int = 30, batch_size: int = 20, period: str = "daily", incremental: bool = True) -> BaoStockSyncStats:
+        """
+        同步历史数据（内部方法，保持原有逻辑）
+        这是原来的 sync_historical_data 方法，重命名为内部方法
+        """
+        stats = BaoStockSyncStats()
+
+        try:
+            period_name = {"daily": "日线", "weekly": "周线", "monthly": "月线"}.get(period, "日线")
+
+            # 计算日期范围
+            end_date = datetime.now().strftime('%Y-%m-%d')
+
+            # 确定同步模式
+            use_incremental = incremental or days < 0
+
+            # 从数据库获取股票列表
+            collection = self.db.stock_basic_info
+            cursor = collection.find({"data_source": "baostock"}, {"code": 1})
+            stock_codes = [doc["code"] async for doc in cursor]
+
+            if not stock_codes:
+                logger.warning("⚠️ 数据库中没有BaoStock股票数据")
+                return stats
+
+            if use_incremental:
+                logger.info(f"🔄 开始BaoStock{period_name}历史数据同步 (增量模式: 各股票从最后日期到{end_date})...")
+            elif days >= 3650:
+                logger.info(f"🔄 开始BaoStock{period_name}历史数据同步 (全历史: 1990-01-01到{end_date})...")
+            else:
+                logger.info(f"🔄 开始BaoStock{period_name}历史数据同步 (最近{days}天到{end_date})...")
+
+            logger.info(f"📊 开始同步{len(stock_codes)}只股票的历史数据...")
+
+            # 批量处理
+            for i in range(0, len(stock_codes), batch_size):
+                batch = stock_codes[i:i + batch_size]
+                batch_stats = await self._sync_historical_batch(batch, days, end_date, period, use_incremental)
+
+                stats.historical_records += batch_stats.historical_records
+                stats.errors.extend(batch_stats.errors)
+
+                logger.info(
+                    f"📊 批次进度: {min(i + batch_size, len(stock_codes))}/{len(stock_codes)} "
+                    f"({(min(i + batch_size, len(stock_codes)) / len(stock_codes) * 100):.1f}%), "
+                    f"已同步 {stats.historical_records} 条记录"
+                )
+
+            logger.info(
+                f"✅ BaoStock{period_name}历史数据同步完成: "
+                f"共 {stats.historical_records} 条记录, "
+                f"{len(stats.errors)} 个错误"
+            )
+
+        except Exception as e:
+            logger.error(f"❌ BaoStock历史数据同步失败: {e}")
+            stats.errors.append(str(e))
+
+        return stats
+
 
 # APScheduler兼容的任务函数
 async def run_baostock_basic_info_sync():
@@ -605,3 +758,16 @@ async def run_baostock_status_check():
         logger.info(f"🔍 BaoStock服务状态: {status['status']}")
     except Exception as e:
         logger.error(f"❌ BaoStock状态检查任务失败: {e}")
+
+
+# 全局服务实例
+_baostock_sync_service = None
+
+
+async def get_baostock_sync_service() -> BaoStockSyncService:
+    """获取BaoStock同步服务实例（单例模式）"""
+    global _baostock_sync_service
+    if _baostock_sync_service is None:
+        _baostock_sync_service = BaoStockSyncService()
+        await _baostock_sync_service.initialize()
+    return _baostock_sync_service

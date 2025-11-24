@@ -258,6 +258,9 @@ async def sync_favorites_realtime(
         elif request.data_source == "akshare":
             from app.worker.akshare_sync_service import get_akshare_sync_service
             service = await get_akshare_sync_service()
+        elif request.data_source == "baostock":
+            from app.worker.baostock_sync_service import get_baostock_sync_service
+            service = await get_baostock_sync_service()
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
